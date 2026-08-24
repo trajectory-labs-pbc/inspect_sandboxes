@@ -294,6 +294,8 @@ def _apply_modal_extensions(
                      Overrides GPU config from compose deploy.resources.
         - block_network (bool): Block all network access
         - cidr_allowlist (list[str]): Allowed CIDR blocks for network access
+        - outbound_domain_allowlist (list[str]): Domains this sandbox may reach; all
+          other egress is blocked by Modal.
         - timeout (int): Sandbox timeout in seconds
         - cloud (str): Cloud provider ("aws", "gcp", "oci", "auto")
         - region (str | list[str]): Cloud region(s) to use
@@ -340,6 +342,7 @@ def _apply_modal_extensions(
     extension_keys = [
         "block_network",
         "cidr_allowlist",
+        "outbound_domain_allowlist",
         "cloud",
         "custom_domain",
         "encrypted_ports",
@@ -369,6 +372,15 @@ def _apply_modal_extensions(
                 ]
             else:
                 params[key] = modal_extensions[key]
+
+    if (
+        params.get("block_network")
+        and params.get("outbound_domain_allowlist") is not None
+    ):
+        raise ValueError(
+            "x-modal.block_network cannot be combined with "
+            "x-modal.outbound_domain_allowlist"
+        )
 
     return volumes
 

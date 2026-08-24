@@ -564,6 +564,41 @@ def test_vm_runtime_rejects_gpu() -> None:
         convert_compose_to_modal_params(config, None)
 
 
+def test_outbound_domain_allowlist_passthrough() -> None:
+    """Test that x-modal outbound_domain_allowlist is passed to Modal."""
+    config = ComposeConfig(
+        services={"default": ComposeService(image="python:3.12")},
+        **{
+            "x-modal": {
+                "outbound_domain_allowlist": ["pypi.org", "github.com"],
+            }
+        },
+    )
+
+    with patch("inspect_sandboxes.modal._compose.modal.Image") as mock_image:
+        mock_image.from_registry.side_effect = lambda x: f"registry:{x}"
+        params = convert_compose_to_modal_params(config, None)
+
+    assert params.kwargs["outbound_domain_allowlist"] == ["pypi.org", "github.com"]
+
+
+def test_outbound_domain_allowlist_rejects_block_network() -> None:
+    """Test that Modal-incompatible outbound network settings fail early."""
+    with pytest.raises(
+        ValueError,
+        match="x-modal.block_network.*x-modal.outbound_domain_allowlist",
+    ):
+        _apply_modal_extensions(
+            {},
+            {
+                "x-modal": {
+                    "block_network": True,
+                    "outbound_domain_allowlist": ["pypi.org"],
+                }
+            },
+        )
+
+
 def test_convert_compose_with_secret_extensions() -> None:
     """Test that x-modal secrets are converted and included in kwargs."""
     service = ComposeService(image="python:3.12")
