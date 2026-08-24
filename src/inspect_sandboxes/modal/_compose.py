@@ -1,4 +1,6 @@
+import re
 import shlex
+from base64 import b64decode
 from dataclasses import dataclass, field
 from logging import getLogger
 from pathlib import Path
@@ -19,6 +21,64 @@ logger = getLogger(__name__)
 # x-modal keys that declare tunnels. If any is set, it overrides the ports
 # translated from service.ports (these extensions are explicit overrides).
 _MODAL_PORT_KEYS = ("encrypted_ports", "h2_ports", "unencrypted_ports")
+
+_ECR_IMAGE_RE = re.compile(
+    r"^\d{12}\.dkr\.ecr\.(?P<region>[a-z0-9-]+)\.amazonaws\.com/"
+)
+
+
+def _ambient_aws_credentials() -> dict[str, str]:
+    """Read AWS credentials from the default chain."""
+    try:
+        import botocore.session
+    except ImportError as e:
+        raise RuntimeError(
+            "pulling an ECR image without x-modal.image_registry_secret requires "
+            "botocore (install inspect-sandboxes[aws])"
+        ) from e
+
+    session = botocore.session.get_session()
+    credentials = session.get_credentials()
+    if credentials is None:
+        raise RuntimeError(
+            "ECR image requires AWS credentials, but none were found in the "
+            "default credential chain; set x-modal.image_registry_secret or "
+            "provide AWS credentials"
+        )
+
+    frozen = credentials.get_frozen_credentials()
+    environment = {
+        "AWS_ACCESS_KEY_ID": frozen.access_key,
+        "AWS_SECRET_ACCESS_KEY": frozen.secret_key,
+    }
+    if frozen.token:
+        environment["AWS_SESSION_TOKEN"] = frozen.token
+    region = session.get_config_variable("region")
+    if region:
+        environment["AWS_REGION"] = region
+    return environment
+
+
+def _ecr_registry_secret(region: str) -> modal.Secret:
+    """Exchange default-chain AWS credentials for an ECR registry secret."""
+    credentials = _ambient_aws_credentials()
+
+    import botocore.session
+
+    client = botocore.session.get_session().create_client(
+        "ecr",
+        region_name=region,
+        aws_access_key_id=credentials["AWS_ACCESS_KEY_ID"],
+        aws_secret_access_key=credentials["AWS_SECRET_ACCESS_KEY"],
+        aws_session_token=credentials.get("AWS_SESSION_TOKEN"),
+    )
+    authorization_token = client.get_authorization_token()["authorizationData"][0][
+        "authorizationToken"
+    ]
+    _, password = b64decode(authorization_token).decode().split(":", maxsplit=1)
+    return modal.Secret.from_dict(
+        {"REGISTRY_USERNAME": "AWS", "REGISTRY_PASSWORD": password}
+    )
 
 
 class ModalVolumeSpec(NamedTuple):
@@ -90,15 +150,31 @@ def convert_compose_to_modal_params(
         # names a Modal secret holding the registry credentials; it is distinct from
         # `x-modal.secrets`, which injects env vars into the running sandbox and has no
         # effect on the image pull.
+        #
+        # Modal's installed ECR helper does not accept AWS_SESSION_TOKEN. Named IAM
+        # secrets can use it directly; ambient credentials are exchanged locally for
+        # the short-lived ECR registry token accepted by Image.from_registry().
         registry_secret = config.extensions.get("x-modal", {}).get(
             "image_registry_secret"
         )
-        if registry_secret is not None:
-            if not isinstance(registry_secret, str):
-                raise TypeError(
-                    "x-modal.image_registry_secret must be a Modal secret name (str), "
-                    f"got {type(registry_secret).__name__}"
+        if registry_secret is not None and not isinstance(registry_secret, str):
+            raise TypeError(
+                "x-modal.image_registry_secret must be a Modal secret name (str), "
+                f"got {type(registry_secret).__name__}"
+            )
+
+        ecr_image = _ECR_IMAGE_RE.match(service.image)
+        if ecr_image:
+            if registry_secret is not None:
+                params["image"] = modal.Image.from_aws_ecr(
+                    service.image, secret=modal.Secret.from_name(registry_secret)
                 )
+            else:
+                params["image"] = modal.Image.from_registry(
+                    service.image,
+                    secret=_ecr_registry_secret(ecr_image["region"]),
+                )
+        elif registry_secret is not None:
             params["image"] = modal.Image.from_registry(
                 service.image, secret=modal.Secret.from_name(registry_secret)
             )

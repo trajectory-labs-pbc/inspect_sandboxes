@@ -1299,6 +1299,11 @@ dependencies = [
     { name = "tenacity" },
 ]
 
+[package.optional-dependencies]
+aws = [
+    { name = "botocore" },
+]
+
 [package.dev-dependencies]
 dev = [
     { name = "griffe" },
@@ -1329,12 +1334,14 @@ docs = [
 
 [package.metadata]
 requires-dist = [
+    { name = "botocore", marker = "extra == 'aws'", specifier = ">=1.34" },
     { name = "daytona-sdk", specifier = ">=0.180.0" },
     { name = "e2b", specifier = ">=2.20" },
     { name = "inspect-ai", specifier = ">=0.3.211" },
     { name = "modal", specifier = ">=1.5.0" },
     { name = "tenacity", specifier = ">=9.1.4" },
 ]
+provides-extras = ["aws"]
 
 [package.metadata.requires-dev]
 dev = [

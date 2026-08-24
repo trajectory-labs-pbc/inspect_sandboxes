@@ -1,5 +1,7 @@
 """Tests for Modal compose configuration conversion."""
 
+import os
+from base64 import b64encode
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, call, patch
@@ -16,6 +18,10 @@ from inspect_sandboxes.modal._compose import (
     _apply_service_ports,
     _service_to_gpu,
     convert_compose_to_modal_params,
+)
+from inspect_sandboxes.modal._modal import (
+    ModalSandboxEnvironment,
+    sandbox_cleanup_startup,
 )
 
 
@@ -877,3 +883,137 @@ class TestImageRegistrySecret:
 
         with pytest.raises(TypeError):
             convert_compose_to_modal_params(config, None)
+
+
+class TestEcrImage:
+    """ECR images need either a fresh token or an ECR registry secret."""
+
+    _image = "123456789012.dkr.ecr.us-west-1.amazonaws.com/task:latest"
+
+    def _config(self, **x_modal: Any) -> ComposeConfig:
+        return ComposeConfig(
+            services={"default": ComposeService(image=self._image)},
+            **({"x-modal": x_modal} if x_modal else {}),
+        )
+
+    def test_ecr_image_uses_ambient_authorization_token(self) -> None:
+        """The default AWS chain becomes a fresh ECR registry-pull secret."""
+        with (
+            patch(
+                "inspect_sandboxes.modal._compose._ambient_aws_credentials",
+                return_value={
+                    "AWS_ACCESS_KEY_ID": "AKIA...",
+                    "AWS_SECRET_ACCESS_KEY": "s",
+                    "AWS_SESSION_TOKEN": "t",
+                    "AWS_REGION": "us-east-1",
+                },
+            ),
+            patch("botocore.session.get_session") as get_session,
+            patch(
+                "inspect_sandboxes.modal._compose.modal.Image.from_registry"
+            ) as from_registry,
+            patch(
+                "inspect_sandboxes.modal._compose.modal.Secret.from_dict"
+            ) as secret_from_dict,
+        ):
+            client = get_session.return_value.create_client.return_value
+            client.get_authorization_token.return_value = {
+                "authorizationData": [
+                    {
+                        "authorizationToken": b64encode(
+                            b"AWS:temporary-ecr-password"
+                        ).decode()
+                    }
+                ]
+            }
+
+            convert_compose_to_modal_params(self._config(), None)
+
+        get_session.return_value.create_client.assert_called_once_with(
+            "ecr",
+            region_name="us-west-1",
+            aws_access_key_id="AKIA...",
+            aws_secret_access_key="s",
+            aws_session_token="t",
+        )
+        secret_from_dict.assert_called_once_with(
+            {
+                "REGISTRY_USERNAME": "AWS",
+                "REGISTRY_PASSWORD": "temporary-ecr-password",
+            }
+        )
+        from_registry.assert_called_once_with(
+            self._image, secret=secret_from_dict.return_value
+        )
+
+    def test_ecr_image_with_named_secret_uses_from_aws_ecr(self) -> None:
+        """A named ECR IAM secret uses Modal's native ECR authentication."""
+        with (
+            patch(
+                "inspect_sandboxes.modal._compose.modal.Image.from_aws_ecr"
+            ) as from_aws_ecr,
+            patch(
+                "inspect_sandboxes.modal._compose.modal.Secret.from_name"
+            ) as secret_from_name,
+        ):
+            convert_compose_to_modal_params(
+                self._config(image_registry_secret="my-ecr-creds"), None
+            )
+
+        secret_from_name.assert_called_once_with("my-ecr-creds")
+        from_aws_ecr.assert_called_once_with(
+            self._image, secret=secret_from_name.return_value
+        )
+
+    def test_non_ecr_image_unchanged(self) -> None:
+        """A public image still uses Modal's anonymous registry pull."""
+        config = ComposeConfig(
+            services={"default": ComposeService(image="python:3.13")}
+        )
+        with patch(
+            "inspect_sandboxes.modal._compose.modal.Image.from_registry"
+        ) as from_registry:
+            convert_compose_to_modal_params(config, None)
+        from_registry.assert_called_once_with("python:3.13")
+
+
+_ECR_INTEGRATION_IMAGE = (
+    "809212640073.dkr.ecr.us-west-2.amazonaws.com/production/inspect-ai/runner"
+    "@sha256:7bf212d482d85461e30e193c2d4829e84757b4f24463c5dfe73dc9093d638820"
+)
+_AWS_DEFAULT_CHAIN_CONFIGURED = bool(os.environ.get("AWS_ACCESS_KEY_ID")) or (
+    Path(os.environ.get("AWS_CONFIG_FILE", "~/.aws/config")).expanduser().is_file()
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
+@pytest.mark.skipif(
+    not _AWS_DEFAULT_CHAIN_CONFIGURED,
+    reason=(
+        "requires AWS_ACCESS_KEY_ID or an AWS config file for the default "
+        "credential chain"
+    ),
+)
+async def test_private_ecr_image_starts_modal_sandbox() -> None:
+    """A private ECR image pulls through Modal and runs a command."""
+    task_name = "test_private_ecr_image"
+    config = ComposeConfig(
+        services={
+            "default": ComposeService(
+                image=_ECR_INTEGRATION_IMAGE,
+                command=["sh", "-c", "sleep infinity"],
+            )
+        }
+    )
+    sandbox_cleanup_startup()
+    environments = await ModalSandboxEnvironment.sample_init(task_name, config, {})
+    try:
+        result = await environments["default"].exec(["sh", "-c", "echo ecr-ready"])
+        assert result.success, result.stderr
+        assert result.stdout == "ecr-ready\n"
+    finally:
+        await ModalSandboxEnvironment.sample_cleanup(
+            task_name, config, environments, False
+        )
+        await ModalSandboxEnvironment.task_cleanup(task_name, config, cleanup=True)
