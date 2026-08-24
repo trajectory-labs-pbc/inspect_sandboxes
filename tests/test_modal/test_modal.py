@@ -70,6 +70,17 @@ def sandbox_env(mock_modal_sandbox: MagicMock) -> ModalSandboxEnvironment:
     """Create a ModalSandboxEnvironment instance."""
     return ModalSandboxEnvironment(mock_modal_sandbox)
 
+def test_default_concurrency_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("INSPECT_MODAL_MAX_SANDBOXES", "40")
+
+    assert ModalSandboxEnvironment.default_concurrency() == 40
+
+
+def test_default_concurrency_unset(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("INSPECT_MODAL_MAX_SANDBOXES", raising=False)
+
+    assert ModalSandboxEnvironment.default_concurrency() is None
+
 
 def test_modal_volume_supports_read_only_mount_options() -> None:
     """The minimum Modal SDK exposes the required read-only mount API."""

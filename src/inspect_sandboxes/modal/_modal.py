@@ -115,6 +115,12 @@ class ModalSandboxEnvironment(SandboxEnvironment):
             "Dockerfile",
         ]
 
+    @override
+    @classmethod
+    def default_concurrency(cls) -> int | None:
+        value = os.environ.get("INSPECT_MODAL_MAX_SANDBOXES")
+        return int(value) if value else None
+
     @classmethod
     def is_docker_compatible(cls) -> bool:
         return True
