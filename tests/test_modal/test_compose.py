@@ -530,6 +530,33 @@ def test_convert_compose_with_extensions() -> None:
     assert result.kwargs["timeout"] == 300
     assert result.kwargs["cloud"] == "aws"
 
+def test_experimental_options_passthrough() -> None:
+    """x-modal experimental_options are passed verbatim to Sandbox.create."""
+    config = ComposeConfig(
+        services={"default": ComposeService()},
+        **{"x-modal": {"experimental_options": {"vm_runtime": True}}},
+    )
+
+    params = convert_compose_to_modal_params(config, None)
+
+    assert params.kwargs["experimental_options"] == {"vm_runtime": True}
+
+
+def test_vm_runtime_rejects_gpu() -> None:
+    """Modal microVM sandboxes cannot be created with a GPU request."""
+    config = ComposeConfig(
+        services={"default": ComposeService()},
+        **{
+            "x-modal": {
+                "gpu": "A10G",
+                "experimental_options": {"vm_runtime": True},
+            }
+        },
+    )
+
+    with pytest.raises(ValueError, match="vm_runtime.*gpu|gpu.*vm_runtime"):
+        convert_compose_to_modal_params(config, None)
+
 
 def test_convert_compose_with_secret_extensions() -> None:
     """Test that x-modal secrets are converted and included in kwargs."""

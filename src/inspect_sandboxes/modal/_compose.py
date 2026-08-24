@@ -141,6 +141,13 @@ def convert_compose_to_modal_params(
 
     volumes = _apply_modal_extensions(params, config.extensions)
 
+
+    experimental = params.get("experimental_options") or {}
+    if experimental.get("vm_runtime") and params.get("gpu"):
+        raise ValueError(
+            "x-modal: gpu and experimental_options.vm_runtime are mutually "
+            "exclusive (Modal VM sandboxes have no GPU support)"
+        )
     return ModalSandboxParams(command=command, kwargs=params, volumes=volumes)
 
 
@@ -220,6 +227,10 @@ def _apply_modal_extensions(
         - h2_ports (list[int]): HTTP/2 ports
         - unencrypted_ports (list[int]): HTTP ports
         - custom_domain (str): Custom domain for web services
+        - experimental_options (dict[str, Any]): Passed verbatim to
+          modal.Sandbox.create(experimental_options=...). E.g.
+          {"vm_runtime": True} runs the sandbox as a microVM (real kernel;
+          enables Docker-in-sandbox). Mutually exclusive with gpu.
         - verbose (bool): Enable verbose logging
         - secrets (str | list[str]): Modal secret name(s) to attach
         - volumes (list[dict[str, str | bool]]): Named Modal Volumes to attach.
@@ -256,6 +267,7 @@ def _apply_modal_extensions(
         "cloud",
         "custom_domain",
         "encrypted_ports",
+        "experimental_options",
         "gpu",
         "h2_ports",
         "idle_timeout",

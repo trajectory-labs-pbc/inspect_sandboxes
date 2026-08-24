@@ -1197,3 +1197,44 @@ async def test_connection_surfaces_declared_port(
     host = port.mappings[0]
     assert isinstance(host.host_ip, str) and host.host_ip, "expected a real host"
     assert host.host_port > 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
+async def test_vm_runtime_runs_docker() -> None:
+    """vm_runtime microVM boots a real kernel and runs dockerd (overlay2)."""
+    config = ComposeConfig(
+        services={
+            "default": ComposeService(
+                image="docker:28-dind", init=True, command="sleep infinity"
+            )
+        },
+        **{
+            "x-modal": {
+                "experimental_options": {"vm_runtime": True},
+                "timeout": 600,
+            }
+        },
+    )
+    sandbox_cleanup_startup()
+    envs = await ModalSandboxEnvironment.sample_init("test-vm-runtime", config, {})
+    sandbox = envs["default"]
+    try:
+        result = await sandbox.exec(
+            [
+                "sh",
+                "-c",
+                "dockerd >/tmp/dockerd.log 2>&1 & sleep 5; "
+                "docker info --format '{{.Driver}}'",
+            ],
+            timeout=120,
+        )
+        assert result.success, result.stderr
+        assert "overlay2" in result.stdout
+    finally:
+        await ModalSandboxEnvironment.sample_cleanup(
+            "test-vm-runtime", config, envs, False
+        )
+        await ModalSandboxEnvironment.task_cleanup(
+            "test-vm-runtime", config, cleanup=True
+        )
