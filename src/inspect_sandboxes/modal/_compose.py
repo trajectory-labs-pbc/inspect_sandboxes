@@ -22,6 +22,26 @@ logger = getLogger(__name__)
 # translated from service.ports (these extensions are explicit overrides).
 _MODAL_PORT_KEYS = ("encrypted_ports", "h2_ports", "unencrypted_ports")
 
+# Compose service fields that ``convert_compose_to_modal_params`` consumes.
+# Names use Docker Compose's YAML spelling so callers can validate a config before
+# handing it to this converter.
+SUPPORTED_SERVICE_FIELDS = frozenset(
+    {
+        "build",
+        "command",
+        "cpus",
+        "deploy",
+        "environment",
+        "expose",
+        "image",
+        "mem_limit",
+        "network_mode",
+        "ports",
+        "working_dir",
+        "x-default",
+    }
+)
+
 _ECR_IMAGE_RE = re.compile(
     r"^\d{12}\.dkr\.ecr\.(?P<region>[a-z0-9-]+)\.amazonaws\.com/"
 )

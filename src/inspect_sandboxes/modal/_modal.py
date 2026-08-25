@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import json
+
 import errno
 import os
 import sys
@@ -49,6 +51,8 @@ logger = getLogger(__name__)
 
 MODAL_APP_NAME = "inspect_modal_sandbox"
 INSPECT_SANDBOX_TAG = {"created_by": "inspect-ai"}
+INSPECT_SANDBOX_EXTRA_TAGS = "INSPECT_SANDBOX_EXTRA_TAGS"
+
 
 _running_sandboxes: ContextVar[list[str]] = ContextVar("modal_running_sandboxes")
 
@@ -59,6 +63,27 @@ def sandbox_cleanup_startup() -> None:
 
 def running_sandboxes() -> list[str]:
     return _running_sandboxes.get()
+
+
+def _sandbox_tags() -> dict[str, str]:
+    extra_tags_json = os.environ.get(INSPECT_SANDBOX_EXTRA_TAGS)
+    if extra_tags_json is None:
+        return dict(INSPECT_SANDBOX_TAG)
+
+    try:
+        extra_tags = json.loads(extra_tags_json)
+    except json.JSONDecodeError as error:
+        raise ValueError(
+            f"{INSPECT_SANDBOX_EXTRA_TAGS} must be a JSON object of string tags"
+        ) from error
+    if not isinstance(extra_tags, dict) or not all(
+        isinstance(key, str) and isinstance(value, str)
+        for key, value in extra_tags.items()
+    ):
+        raise ValueError(
+            f"{INSPECT_SANDBOX_EXTRA_TAGS} must be a JSON object of string tags"
+        )
+    return INSPECT_SANDBOX_TAG | cast(dict[str, str], extra_tags)
 
 
 # ---------------------------------------------------------------------------
@@ -192,7 +217,7 @@ class ModalSandboxEnvironment(SandboxEnvironment):
             }
 
         sandbox = await cls._create_sandbox(command, sandbox_kwargs)
-        await sandbox.set_tags.aio(INSPECT_SANDBOX_TAG)
+        await sandbox.set_tags.aio(_sandbox_tags())
         running_sandboxes().append(sandbox.object_id)
 
         has_tunnels = any(sandbox_kwargs.get(key) for key in _MODAL_PORT_KEYS)

@@ -250,6 +250,44 @@ async def test_sample_init_sets_sandbox_name(
     assert kwargs["name"].startswith("inspect-my_task-7-")
 
 
+
+@pytest.mark.asyncio
+async def test_sample_init_merges_extra_sandbox_tags(
+    mock_modal_app: MagicMock,
+    mock_modal_sandbox: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        "INSPECT_SANDBOX_EXTRA_TAGS",
+        '{"hawk_job_id": "eval-123", "hawk_created_by": "alice"}',
+    )
+    with (
+        patch.object(
+            ModalSandboxEnvironment,
+            "_lookup_app",
+            new_callable=AsyncMock,
+            return_value=mock_modal_app,
+        ),
+        patch.object(
+            ModalSandboxEnvironment,
+            "_create_sandbox",
+            new_callable=AsyncMock,
+            return_value=mock_modal_sandbox,
+        ),
+    ):
+        await ModalSandboxEnvironment.task_init("my_task", None)
+        await ModalSandboxEnvironment.sample_init(
+            "my_task", None, {"__sample_id__": "7"}
+        )
+
+    mock_modal_sandbox.set_tags.aio.assert_awaited_once_with(
+        {
+            "created_by": "inspect-ai",
+            "hawk_job_id": "eval-123",
+            "hawk_created_by": "alice",
+        }
+    )
+
 @pytest.mark.asyncio
 async def test_sample_init_omits_volumes_without_compose_volume_specs(
     mock_modal_app: MagicMock,
